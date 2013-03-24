@@ -1,6 +1,10 @@
 package lockservice
 
-import "net/rpc"
+import (
+   "net/rpc"
+   "crypto/rand"
+   "math/big"
+)
 
 //
 // the lockservice Clerk lives in the client
@@ -9,6 +13,7 @@ import "net/rpc"
 type Clerk struct {
   servers [2]string // primary port, backup port
   // Your definitions here.
+  clientid int64
 }
 
 
@@ -17,6 +22,7 @@ func MakeClerk(primary string, backup string) *Clerk {
   ck.servers[0] = primary
   ck.servers[1] = backup
   // Your initialization code here.
+  ck.clientid = nrand()
   return ck
 }
 
@@ -51,6 +57,13 @@ func call(srv string, rpcname string,
   return false
 }
 
+//generating unique random number for each client/request
+func nrand() int64 {
+  max := big.NewInt(int64(1) << 62)
+  bigx, _ := rand.Int(rand.Reader, max)
+  x := bigx.Int64()
+  return x
+}
 //
 // ask the lock service for a lock.
 // returns true if the lock service
@@ -62,14 +75,18 @@ func (ck *Clerk) Lock(lockname string) bool {
   // prepare the arguments.
   args := &LockArgs{}
   args.Lockname = lockname
+  args.Requestid = nrand()
+  args.Clientid = ck.clientid
   var reply LockReply
   
   // send an RPC request, wait for the reply.
   ok := call(ck.servers[0], "LockServer.Lock", args, &reply)
   if ok == false {
-    return false
+     ok = call(ck.servers[1], "LockServer.Lock", args, &reply)
   }
-  
+  if ok == false {
+  	return false
+  }
   return reply.OK
 }
 
@@ -83,6 +100,18 @@ func (ck *Clerk) Lock(lockname string) bool {
 func (ck *Clerk) Unlock(lockname string) bool {
 
   // Your code here.
+  args := &LockArgs{}
+  args.Lockname = lockname
+  args.Requestid = nrand()
+  args.Clientid = ck.clientid
+  var reply LockReply
 
-  return false
+  ok := call(ck.servers[0], "LockServer.Unlock", args, &reply)
+  if ok == false {
+	ok = call(ck.servers[1], "LockServer.Unlock", args, &reply)
+  }
+  if ok == false {
+	return false
+  }
+  return reply.OK
 }

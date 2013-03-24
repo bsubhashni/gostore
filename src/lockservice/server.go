@@ -9,6 +9,17 @@ import "os"
 import "io"
 import "time"
 
+type LockStatus struct {
+   status bool
+   clientid int64
+   requestid int64
+}
+
+type ResponseStore struct {
+  hasSeenRequest  bool
+  lastResponse bool
+}
+
 type LockServer struct {
   mu sync.Mutex
   l net.Listener
@@ -19,7 +30,8 @@ type LockServer struct {
   backup string   // backup's port
 
   // for each lock name, is it locked?
-  locks map[string]bool
+  locks map[string]LockStatus
+  servedrequests map[int64]ResponseStore
 }
 
 
@@ -31,17 +43,39 @@ type LockServer struct {
 func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
   ls.mu.Lock()
   defer ls.mu.Unlock()
-
-
-  locked, _ := ls.locks[args.Lockname]
-
-  if locked {
-    reply.OK = false
-  } else {
-    reply.OK = true
-    ls.locks[args.Lockname] = true
+  if ls.servedrequests[args.Requestid].hasSeenRequest == true {
+	reply.OK = ls.servedrequests[args.Requestid].lastResponse
+	return nil
   }
+  lockstatus, _ := ls.locks[args.Lockname]
+  locked := lockstatus.status
 
+  if locked == true {
+     reply.OK = false
+   } else {
+    newlockstatus := LockStatus { true,  args.Clientid, args.Requestid }
+    ls.locks[args.Lockname] = newlockstatus
+    reply.OK = true
+   }
+
+   if ls.am_primary == true {
+    var backupreply LockReply
+    c, errx := rpc.Dial("unix", ls.backup)
+    if errx != nil {
+	 //backup conenction failed
+    } else {
+     defer c.Close()
+     ok := c.Call("LockServer.Lock", args, &backupreply)
+     if ok == nil {
+	if backupreply.OK != reply.OK {
+        	//inconsistent data
+	}
+      } else {
+	//backup failed
+     }
+    }
+   }
+  ls.servedrequests[args.Requestid] = ResponseStore { true, reply.OK }
   return nil
 }
 
@@ -49,9 +83,44 @@ func (ls *LockServer) Lock(args *LockArgs, reply *LockReply) error {
 // server Unlock RPC handler.
 //
 func (ls *LockServer) Unlock(args *UnlockArgs, reply *UnlockReply) error {
+  ls.mu.Lock()
+  defer ls.mu.Unlock()
 
-  // Your code here.
+  if ls.servedrequests[args.Requestid].hasSeenRequest == true {
+	reply.OK = ls.servedrequests[args.Requestid].lastResponse
+	return nil
+  }
 
+  lockstatus, _ :=  ls.locks[args.Lockname]
+  locked := lockstatus.status
+
+   if locked == false {
+     reply.OK = false
+    } else  {
+     newlockstatus := LockStatus { false, args.Clientid, args.Requestid }
+     ls.locks[args.Lockname] = newlockstatus
+     reply.OK = true
+    }
+
+    if ls.am_primary == true {
+     var backupreply UnlockReply
+     c, errx := rpc.Dial("unix", ls.backup)
+     if errx != nil {
+	//backup connection failed
+     } else {
+      defer c.Close()
+      ok := c.Call("LockServer.Unlock", args, &backupreply)
+      if ok == nil {
+	if backupreply.OK != reply.OK {
+		//inconsistent data
+	}
+      } else {
+	//backup failed
+      }
+     }
+   }
+
+  ls.servedrequests[args.Requestid] = ResponseStore { true, reply.OK }
   return nil
 }
 
@@ -89,10 +158,10 @@ func StartServer(primary string, backup string, am_primary bool) *LockServer {
   ls := new(LockServer)
   ls.backup = backup
   ls.am_primary = am_primary
-  ls.locks = map[string]bool{}
+  ls.locks = map[string]LockStatus{}
 
   // Your initialization code here.
-
+  ls.servedrequests = map[int64]ResponseStore{}
 
   me := ""
   if am_primary {
