@@ -20,21 +20,41 @@ type PBServer struct {
   me string
   vs *viewservice.Clerk
   // Your declarations here.
+  gostore map[string]string
+  currentview viewservice.View
 }
 
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
-
   // Your code here.
-
+  pb.mu.Lock()
+  defer pb.mu.Unlock()
+  var ok bool
+  if pb.me == pb.currentview.Primary {
+	reply.Value,ok = pb.gostore[args.Key]
+	if ok == false {
+	  reply.Value = ""
+	  reply.Err = ErrWrongServer
+	} else {
+	  reply.Err = OK
+	}
+   } else {
+	reply.Err = ErrWrongServer
+	reply.Value = ""
+  }
   return nil
 }
 
 func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
   reply.Err = OK
-
-
   // Your code here.
-
+  pb.mu.Lock()
+  pb.mu.Unlock()
+  if pb.me == pb.currentview.Primary {
+	pb.gostore[args.Key] = args.Value
+	reply.Err = OK
+  } else {
+	reply.Err = ErrWrongServer
+  }
   return nil
 }
 
@@ -46,8 +66,12 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
 //   manage transfer of state from primary to new backup.
 //
 func (pb *PBServer) tick() {
-
   // Your code here.
+  var newview viewservice.View
+  newview,errx := pb.vs.Ping(pb.currentview.Viewnum)
+  if errx != nil {
+  	pb.currentview = newview
+  }
 }
 
 // tell the server to shut itself down.
@@ -63,7 +87,7 @@ func StartServer(vshost string, me string) *PBServer {
   pb.me = me
   pb.vs = viewservice.MakeClerk(me, vshost)
   // Your pb.* initializations here.
-
+  pb.gostore = map[string]string {}
   rpcs := rpc.NewServer()
   rpcs.Register(pb)
 

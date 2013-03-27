@@ -3,16 +3,18 @@ package pbservice
 import "viewservice"
 import "net/rpc"
 // You'll probably need to uncomment this:
-// import "time"
+import "time"
 
 
 type Clerk struct {
   vs *viewservice.Clerk
+  primary string
 }
 
 func MakeClerk(vshost string, me string) *Clerk {
   ck := new(Clerk)
   ck.vs = viewservice.MakeClerk(me, vshost)
+  ck.primary = ""
   return ck
 }
 
@@ -40,7 +42,7 @@ func call(srv string, rpcname string,
     return false
   }
   defer c.Close()
-    
+
   err := c.Call(rpcname, args, reply)
   if err == nil {
     return true
@@ -56,10 +58,25 @@ func call(srv string, rpcname string,
 // says the key doesn't exist (has never been Put().
 //
 func (ck *Clerk) Get(key string) string {
+   // Your code here. 
+   var request GetArgs
+   //dummy
+   reply := GetReply {"", ErrWrongServer}
+   request.Key = key
+   if ck.primary == "" {
+	ck.primary,_ = ck.GetView()
+   }
+   ok := call(ck.primary,"PBServer.Get",&request,&reply)
 
-  // Your code here.
-
-  return "???"
+   for ok == false  &&
+	   reply.Err == ErrWrongServer {
+	   ck.primary, _ =  ck.GetView()
+	   ok = call(ck.primary,"PBServer.Get",&request,&reply)
+   }
+   if ok == true {
+	return reply.Value
+   }
+  return ""
 }
 
 //
@@ -70,3 +87,15 @@ func (ck *Clerk) Put(key string, value string) {
 
   // Your code here.
 }
+
+func (ck *Clerk) GetView() (string, bool)  {
+	var currentview viewservice.View
+	var OK bool
+	currentview, OK =  ck.vs.Get()
+	for OK == false {
+		time.Sleep(viewservice.PingInterval)
+		currentview, OK = ck.vs.Get()
+	}
+	return currentview.Primary, OK
+}
+
