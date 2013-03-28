@@ -29,15 +29,34 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
   pb.mu.Lock()
   defer pb.mu.Unlock()
   var ok bool
+
   if pb.me == pb.currentview.Primary {
 	reply.Value,ok = pb.gostore[args.Key]
 	if ok == false {
 	  reply.Value = ""
-	  reply.Err = ErrWrongServer
+	  reply.Err = ErrNoKey
+	  return nil
 	} else {
 	  reply.Err = OK
+	  //forward operations to backup 
+	  if pb.currentview.Backup != "" {
+	     ok = call(pb.currentview.Backup, "PBServer.AcceptGet", &args, &reply)
+	     if ok == false {
+		reply.Value = ""
+		reply.Err = ErrNoKey
+		return nil
+	     }
+	  }
+	  return nil
 	}
    } else {
+	if pb.currentview.Primary != "" {
+	//forward requests to the primary 
+	   ok = call(pb.currentview.Primary, "PBServer.AcceptGet", &args, &reply)
+	   if ok == true {
+		return nil
+	   }
+        }
 	reply.Err = ErrWrongServer
 	reply.Value = ""
   }
@@ -49,13 +68,54 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
   // Your code here.
   pb.mu.Lock()
   pb.mu.Unlock()
+  var ok bool
+
   if pb.me == pb.currentview.Primary {
+	fmt.Printf("Got put request\n")
 	pb.gostore[args.Key] = args.Value
 	reply.Err = OK
+	if pb.currentview.Backup != "" {
+	  ok  = call(pb.currentview.Backup, "PBServer.AcceptPut", &args, &reply)
+	  if ok == false {
+		reply.Err = ErrWrongServer
+	  }
+	}
   } else {
 	reply.Err = ErrWrongServer
+	if pb.currentview.Primary != "" {
+	  ok = call(pb.currentview.Primary, "PBServer.AcceptPut", &args, &reply)
+	  if ok == false {
+		reply.Err = ErrWrongServer
+	  }
+	}
+	fmt.Printf("Unable to server put \n")
   }
   return nil
+}
+
+//accepting forwarded requests
+func (pb *PBServer) AcceptGet(args *GetArgs, reply *GetReply) error {
+ pb.mu.Lock()
+ defer pb.mu.Unlock()
+ var ok bool
+ fmt.Printf("Backup/Primary get request \n")
+ reply.Value,ok = pb.gostore[args.Key]
+ if ok == false {
+	reply.Value = ""
+	reply.Err = ErrNoKey
+ } else {
+	reply.Err = OK
+ }
+ return nil
+}
+
+func (pb *PBServer) AcceptPut(args *PutArgs, reply *PutReply) error {
+ pb.mu.Lock()
+ defer pb.mu.Unlock()
+ fmt.Printf("Backup/Primary put request \n")
+ pb.gostore[args.Key] = args.Value
+ reply.Err = OK
+ return nil
 }
 
 
@@ -69,9 +129,39 @@ func (pb *PBServer) tick() {
   // Your code here.
   var newview viewservice.View
   newview,errx := pb.vs.Ping(pb.currentview.Viewnum)
-  if errx != nil {
-  	pb.currentview = newview
+  if errx == nil {
+	ShouldSyncNewBackup := pb.currentview.Primary == newview.Primary && pb.currentview.Backup != newview.Backup
+	pb.currentview = newview
+	if ShouldSyncNewBackup {
+		pb.updateBackup()
+	}
+	//pb.currentview = newview
+	//fmt.Printf("Got new  view %v me %v \n", pb.currentview.Primary, pb.me)
   }
+}
+
+//primary syncs new backup
+func (pb *PBServer) updateBackup() error {
+  pb.mu.Lock()
+  defer pb.mu.Unlock()
+  request := GoStore { pb.gostore }
+  reply := SyncReply {}
+  ok := call(pb.currentview.Backup, "PBServer.Sync",&request, &reply)
+  if ok == false {
+	fmt.Printf("Backup sync failed from Primary \n")
+  }
+  return nil
+}
+func (pb *PBServer) Sync(request *GoStore, reply *SyncReply) error {
+  pb.mu.Lock()
+  defer pb.mu.Unlock()
+  fmt.Printf("Backup received request \n")
+  pb.gostore = map[string]string {}
+  for k, v := range request.KeyValue {
+	fmt.Printf("syncing backup \n")
+	pb.gostore[k] = v
+  }
+  return nil
 }
 
 // tell the server to shut itself down.

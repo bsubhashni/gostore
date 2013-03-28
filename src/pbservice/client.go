@@ -4,7 +4,7 @@ import "viewservice"
 import "net/rpc"
 // You'll probably need to uncomment this:
 import "time"
-
+import "fmt"
 
 type Clerk struct {
   vs *viewservice.Clerk
@@ -47,6 +47,7 @@ func call(srv string, rpcname string,
   if err == nil {
     return true
   }
+  fmt.Printf("call rpc failed err %v \n",err)
   return false
 }
 
@@ -84,8 +85,20 @@ func (ck *Clerk) Get(key string) string {
 // must keep trying until it succeeds.
 //
 func (ck *Clerk) Put(key string, value string) {
-
   // Your code here.
+  var request PutArgs
+  var reply PutReply
+  request = PutArgs {key, value}
+  if ck.primary == "" {
+	ck.primary,_ = ck.GetView()
+  }
+  ok := call(ck.primary, "PBServer.Put",&request, &reply)
+  for ok == false &&
+	reply.Err == ErrWrongServer {
+	ck.primary,_ = ck.GetView()
+	ok = call(ck.primary, "PBServer.Put", &request, &reply)
+  }
+  //return ""
 }
 
 func (ck *Clerk) GetView() (string, bool)  {

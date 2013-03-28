@@ -25,5 +25,12 @@ type GetReply struct {
   Value string
 }
 
+type GoStore struct {
+  KeyValue map[string]string
+}
+
+type SyncReply struct {
+  Done bool
+}
 
 // Your RPC definitions here.
