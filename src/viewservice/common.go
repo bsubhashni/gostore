@@ -60,6 +60,7 @@ const DeadPings = 5
 type PingArgs struct {
   Me string     // "host:port"
   Viewnum uint  // caller's notion of current view #
+  PingTime time.Time
 }
 
 type PingReply struct {

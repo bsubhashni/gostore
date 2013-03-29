@@ -18,6 +18,7 @@ type PutReply struct {
 
 type GetArgs struct {
   Key string
+  Viewnum uint
 }
 
 type GetReply struct {
@@ -32,5 +33,16 @@ type GoStore struct {
 type SyncReply struct {
   Done bool
 }
+
+type AcceptGetArgs struct {
+   Key string
+   Viewnum uint
+}
+type AcceptPutArgs struct {
+   Key string
+   Value string
+   Viewnum uint
+}
+
 
 // Your RPC definitions here.

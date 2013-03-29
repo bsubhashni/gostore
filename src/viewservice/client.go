@@ -2,6 +2,7 @@ package viewservice
 
 import "net/rpc"
 import "fmt"
+import "time"
 
 //
 // the viewservice Clerk lives in the client
@@ -53,6 +54,7 @@ func call(srv string, rpcname string,
 func (ck *Clerk) Ping(viewnum uint) (View, error) {
   // prepare the arguments.
   args := &PingArgs{}
+  args.PingTime = time.Now()
   args.Me = ck.me
   args.Viewnum = viewnum
   var reply PingReply

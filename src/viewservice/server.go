@@ -7,7 +7,7 @@ import "time"
 import "sync"
 import "fmt"
 import "os"
-
+import "errors"
 type ServerPingInfo struct {
   lastpingedtime time.Time
   lastviewnumseen uint
@@ -53,6 +53,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	vs.newview.Backup = args.Me
 	vs.serverscount += 1
 	hasViewChanged = true
+	vs.backupAcked = false
 	vs.viewbackupuninitialized = false
   } else {
 	if vs.servers[args.Me].lastpingedtime.IsZero() == true {
@@ -61,7 +62,16 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	if vs.currentview.Backup == args.Me {
 		if args.Viewnum == vs.currentview.Viewnum {
 			vs.backupAcked = true
-		} else {
+		}
+		if args.Viewnum == 0  &&
+			vs.newview.Backup != args.Me &&
+				vs.backupAcked != false &&
+				isBackupNotSet == false {
+			//backup restarted
+			vs.currentview.Backup = ""
+			vs.newview.Primary = vs.currentview.Primary
+			vs.newview.Backup = args.Me
+			hasViewChanged = true
 			vs.backupAcked = false
 		}
 	}
@@ -91,7 +101,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	     }
 	}
   }
-  vs.servers[args.Me] = ServerPingInfo { time.Now(), args.Viewnum }
+  vs.servers[args.Me] = ServerPingInfo { args.PingTime, args.Viewnum }
   if hasViewChanged == true {
 	vs.newview.Viewnum = vs.currentview.Viewnum + 1
   }
@@ -104,13 +114,17 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 //
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
   // Your code here.
+  if vs.currentview.Primary == "" {
+	return errors.New("View not set")
+  }
   reply.View = vs.currentview
   return nil
 }
 
 
 func isAlive(t time.Time) bool {
-	if time.Since(t).Nanoseconds()/1000000 > PingInterval.Nanoseconds()/1000000 {
+	//added random hack because time isnt exact due to lock
+	if time.Since(t).Nanoseconds()/1000000 - 10 > PingInterval.Nanoseconds()/1000000 {
 		return false
 	} else {
 		return true

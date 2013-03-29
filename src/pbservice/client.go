@@ -4,17 +4,18 @@ import "viewservice"
 import "net/rpc"
 // You'll probably need to uncomment this:
 import "time"
-import "fmt"
+import "sync"
 
 type Clerk struct {
   vs *viewservice.Clerk
-  primary string
+  view viewservice.View
+  mu sync.Mutex
 }
 
 func MakeClerk(vshost string, me string) *Clerk {
   ck := new(Clerk)
   ck.vs = viewservice.MakeClerk(me, vshost)
-  ck.primary = ""
+  ck.view = viewservice.View { 0, "", ""}
   return ck
 }
 
@@ -47,7 +48,6 @@ func call(srv string, rpcname string,
   if err == nil {
     return true
   }
-  fmt.Printf("call rpc failed err %v \n",err)
   return false
 }
 
@@ -60,24 +60,22 @@ func call(srv string, rpcname string,
 //
 func (ck *Clerk) Get(key string) string {
    // Your code here. 
+   ck.mu.Lock()
+   defer ck.mu.Unlock()
    var request GetArgs
    //dummy
-   reply := GetReply {"", ErrWrongServer}
+   reply := GetReply {OK, ""}
    request.Key = key
-   if ck.primary == "" {
-	ck.primary,_ = ck.GetView()
+   if  ck.view.Primary == "" {
+	ck.GetView()
    }
-   ok := call(ck.primary,"PBServer.Get",&request,&reply)
-
-   for ok == false  &&
-	   reply.Err == ErrWrongServer {
-	   ck.primary, _ =  ck.GetView()
-	   ok = call(ck.primary,"PBServer.Get",&request,&reply)
+   ok := call(ck.view.Primary,"PBServer.Get",&request,&reply)
+   for ok == false ||
+	reply.Err == ErrWrongServer {
+	   ck.GetView()
+	   ok = call(ck.view.Primary,"PBServer.Get",&request,&reply)
    }
-   if ok == true {
-	return reply.Value
-   }
-  return ""
+  return reply.Value
 }
 
 //
@@ -86,29 +84,33 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) Put(key string, value string) {
   // Your code here.
+  ck.mu.Lock()
+  defer ck.mu.Unlock()
   var request PutArgs
-  var reply PutReply
+  reply := PutReply { OK }
   request = PutArgs {key, value}
-  if ck.primary == "" {
-	ck.primary,_ = ck.GetView()
-  }
-  ok := call(ck.primary, "PBServer.Put",&request, &reply)
-  for ok == false &&
+  if  ck.view.Primary == "" {
+        ck.GetView()
+   }
+  ok := call(ck.view.Primary, "PBServer.Put",&request, &reply)
+  for ok == false ||
 	reply.Err == ErrWrongServer {
-	ck.primary,_ = ck.GetView()
-	ok = call(ck.primary, "PBServer.Put", &request, &reply)
+	ck.GetView()
+	ok = call(ck.view.Primary, "PBServer.Put", &request, &reply)
   }
   //return ""
 }
 
-func (ck *Clerk) GetView() (string, bool)  {
+func (ck *Clerk) GetView()  {
 	var currentview viewservice.View
-	var OK bool
-	currentview, OK =  ck.vs.Get()
-	for OK == false {
-		time.Sleep(viewservice.PingInterval)
-		currentview, OK = ck.vs.Get()
+	var ok bool
+	currentview, ok =  ck.vs.Get()
+	for ok == false ||
+		currentview.Primary == ""  {
+
+			time.Sleep(viewservice.PingInterval)
+			currentview,ok = ck.vs.Get()
 	}
-	return currentview.Primary, OK
+	ck.view = currentview
 }
 
