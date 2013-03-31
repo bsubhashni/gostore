@@ -30,6 +30,26 @@ import "fmt"
 import "math/rand"
 
 
+type Proposal struct{
+	seq int
+	value interface{}
+	proposalnumber int
+}
+type AcceptReply struct{
+	decision bool
+	highestproposal int
+}
+
+type Instance struct{
+	value interface{}
+	highestaccept int
+	highestproposal int
+	decided bool
+}
+type Sequence struct {
+	id int
+	value interface{}
+}
 type Paxos struct {
   mu sync.Mutex
   l net.Listener
@@ -39,8 +59,11 @@ type Paxos struct {
   peers []string
   me int // index into peers[]
 
-
   // Your data here.
+  majority int
+  proposalhint int
+  receiver chan Sequence
+  history map[int]Instance
 }
 
 //
@@ -87,6 +110,13 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 //
 func (px *Paxos) Start(seq int, v interface{}) {
   // Your code here.
+  _, ok := px.history[seq]
+  if ok == false {
+	//start new instance
+	newsequence := Sequence {seq, v}
+	go px.propose(newsequence)
+  }
+  return
 }
 
 //
@@ -156,7 +186,41 @@ func (px *Paxos) Status(seq int) (bool, interface{}) {
   // Your code here.
   return false, nil
 }
-
+//paxos protocol actors
+func (px *Paxos) propose(seq Sequence){
+   px.mu.Lock()
+   defer px.mu.Unlock()
+   divider := 1
+   proposalnumber := px.proposalhint + (px.proposalhint % (divider + px.me))
+   if px.dead == true {
+	return
+   }
+   //start new agreement - proposal phase
+   px.history[seq.id] = Instance {seq.value, 0 , 0, false}
+   newproposal  :=  Proposal { seq.id, seq.value, proposalnumber }
+   var reply AcceptReply
+   acceptcounter := 0
+   for _,peer:= range px.peers {
+	ok := call(peer, "Paxos.Accept", &newproposal, &reply)
+	if ok == true {
+		if reply.decision == true {
+		    acceptcounter += 1
+		} else {
+		    if px.proposalhint < reply.highestproposal {
+			px.proposalhint = reply.highestproposal
+		    }
+		}
+	}
+   }
+  if acceptcounter >= px.majority {
+	//start the decide phase
+  }
+ return
+}
+func (px *Paxos) Accept(p *Proposal, reply *AcceptReply) bool {
+//	if p.seq > px.history[]
+  return true
+}
 
 //
 // tell the peer to shut itself down.
@@ -180,8 +244,11 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
   px.peers = peers
   px.me = me
 
-
   // Your initialization code here.
+  px.majority = len(px.peers)/2 + 1
+  px.proposalhint = 1
+  px.receiver = make(chan Sequence)
+  px.history =  map[int]Instance {}
 
   if rpcs != nil {
     // caller will create socket &c
