@@ -31,13 +31,13 @@ import "math/rand"
 
 
 type Proposal struct{
-	seq int
-	value interface{}
-	proposalnumber int
+	Seq int
+	Value interface{}
+	Proposalnumber int
 }
 type AcceptReply struct{
-	decision bool
-	highestproposal int
+	Decision bool
+	Highestproposal int
 }
 
 type Instance struct{
@@ -92,11 +92,10 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
     return false
   }
   defer c.Close()
-    
   err = c.Call(name, args, reply)
   if err == nil {
     return true
-  }
+  } 
   return false
 }
 
@@ -113,6 +112,7 @@ func (px *Paxos) Start(seq int, v interface{}) {
   _, ok := px.history[seq]
   if ok == false {
 	//start new instance
+	fmt.Printf("test start \n ")
 	newsequence := Sequence {seq, v}
 	go px.propose(newsequence)
   }
@@ -196,32 +196,104 @@ func (px *Paxos) propose(seq Sequence){
 	return
    }
    //start new agreement - proposal phase
-   px.history[seq.id] = Instance {seq.value, 0 , 0, false}
+   px.majority = len(px.peers) + 1
+   px.history[seq.id] = Instance {nil, 0 , 0, false}
    newproposal  :=  Proposal { seq.id, seq.value, proposalnumber }
    var reply AcceptReply
    acceptcounter := 0
    for _,peer:= range px.peers {
+	fmt.Printf("calling \n")
 	ok := call(peer, "Paxos.Accept", &newproposal, &reply)
 	if ok == true {
-		if reply.decision == true {
+		if reply.Decision == true {
 		    acceptcounter += 1
 		} else {
-		    if px.proposalhint < reply.highestproposal {
-			px.proposalhint = reply.highestproposal
+		    if px.proposalhint < reply.Highestproposal {
+			px.proposalhint = reply.Highestproposal
 		    }
 		}
+	} else {
+	   //delete(px.peers, peer)
 	}
    }
+  px.majority = len(px.peers)/2 +1
+  decidecounter := 0
   if acceptcounter >= px.majority {
 	//start the decide phase
+  //decidecounter := 0
+  var decidereply AcceptReply
+   for _, peer := range px.peers {
+	ok := call(peer, "Paxos.Decide", &newproposal, &decidereply)
+	if ok == true {
+	    if decidereply.Decision == true  {
+		decidecounter += 1
+	    } else {
+		if px.proposalhint < decidereply.Highestproposal {
+			px.proposalhint = decidereply.Highestproposal
+		}
+	    }
+	} else {
+	    //server not responding
+	    //delete(px.peers, peer)
+	}
+    }
   }
+ px.majority = len(px.peers)/2 +1
+ decidedcounter := 0
+ if decidecounter >= px.majority {
+	var v interface{}
+	for _, peer := range px.peers {
+		ok := call(peer, "Paxos.Decided", &newproposal, &v)
+		if ok == false {
+			//delete(px.peers, peer)
+		} else {
+			decidedcounter++
+		}
+	}
+ }
  return
 }
-func (px *Paxos) Accept(p *Proposal, reply *AcceptReply) bool {
-//	if p.seq > px.history[]
-  return true
+func (px *Paxos) Accept(args *Proposal, reply *AcceptReply) error {
+  px.mu.Lock()
+  defer px.mu.Unlock()
+  instance ,ok := px.history[args.Seq]
+  if ok == true {
+	if instance.highestproposal >= args.Proposalnumber {
+		reply.Decision = false
+		reply.Highestproposal = instance.highestproposal
+		return nil
+	}
+   } else {
+	px.history[args.Seq] = Instance {nil, 0, 0, false}
+   }
+   reply.Decision = true
+   reply.Highestproposal = args.Proposalnumber
+   instance.highestproposal = args.Proposalnumber
+   return nil
 }
-
+func (px *Paxos) Decide(args *Proposal, reply *AcceptReply) error {
+  px.mu.Lock()
+  defer px.mu.Unlock()
+  instance, _ := px.history[args.Seq]
+  if args.Proposalnumber >= instance.highestproposal {
+	instance.highestaccept = args.Proposalnumber
+	instance.value = args.Value
+	reply.Decision = true
+	reply.Highestproposal = args.Proposalnumber
+  } else {
+	reply.Decision = false
+	reply.Highestproposal = instance.highestproposal
+  }
+  return nil
+}
+func (px *Paxos) Decided(args *Proposal, v *interface{}) error {
+  px.mu.Lock()
+  defer px.mu.Unlock()
+  instance,_ := px.history[args.Seq]
+  instance.value = args.Value
+  instance.decided = true
+  return nil
+}
 //
 // tell the peer to shut itself down.
 // for testing.
